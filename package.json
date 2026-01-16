@@ -1,0 +1,96 @@
+{
+  "name": "@oxog/log",
+  "version": "1.0.0",
+  "description": "Blazing fast, plugin-based logging with @oxog ecosystem integration, colored output, and swappable transports",
+  "type": "module",
+  "main": "./dist/index.cjs",
+  "module": "./dist/index.js",
+  "types": "./dist/index.d.ts",
+  "exports": {
+    ".": {
+      "import": {
+        "types": "./dist/index.d.ts",
+        "default": "./dist/index.js"
+      },
+      "require": {
+        "types": "./dist/index.d.cts",
+        "default": "./dist/index.cjs"
+      }
+    },
+    "./plugins": {
+      "import": {
+        "types": "./dist/plugins/index.d.ts",
+        "default": "./dist/plugins/index.js"
+      },
+      "require": {
+        "types": "./dist/plugins/index.d.cts",
+        "default": "./dist/plugins/index.cjs"
+      }
+    },
+    "./transports": {
+      "import": {
+        "types": "./dist/transports/index.d.ts",
+        "default": "./dist/transports/index.js"
+      },
+      "require": {
+        "types": "./dist/transports/index.d.cts",
+        "default": "./dist/transports/index.cjs"
+      }
+    }
+  },
+  "files": [
+    "dist"
+  ],
+  "sideEffects": false,
+  "repository": {
+    "type": "git",
+    "url": "git+https://github.com/ersinkoc/log.git"
+  },
+  "bugs": {
+    "url": "https://github.com/ersinkoc/log/issues"
+  },
+  "homepage": "https://log.oxog.dev",
+  "keywords": [
+    "log",
+    "logger",
+    "logging",
+    "structured-logging",
+    "json-logging",
+    "typescript",
+    "plugin",
+    "micro-kernel",
+    "oxog",
+    "pino-alternative",
+    "winston-alternative"
+  ],
+  "author": "Ersin Koç",
+  "license": "MIT",
+  "scripts": {
+    "build": "tsup",
+    "test": "vitest run",
+    "test:watch": "vitest",
+    "test:coverage": "vitest run --coverage",
+    "lint": "eslint src/",
+    "format": "prettier --write .",
+    "typecheck": "tsc --noEmit",
+    "prepublishOnly": "npm run build && npm run test:coverage"
+  },
+  "engines": {
+    "node": ">=18"
+  },
+  "dependencies": {
+    "@oxog/types": "^1.0.0",
+    "@oxog/plugin": "^1.0.0",
+    "@oxog/pigment": "^1.0.0",
+    "@oxog/emitter": "^1.0.0"
+  },
+  "devDependencies": {
+    "@types/node": "^20.0.0",
+    "@vitest/coverage-v8": "^2.0.0",
+    "eslint": "^9.0.0",
+    "prettier": "^3.0.0",
+    "tsup": "^8.0.0",
+    "typescript": "^5.0.0",
+    "vitest": "^2.0.0"
+  }
+}

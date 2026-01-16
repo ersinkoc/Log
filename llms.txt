@@ -1,0 +1,196 @@
+# @oxog/log
+
+Blazing fast, plugin-based logging for Node.js and browsers with micro-kernel architecture.
+
+## Quick Start
+
+```ts
+import { createLogger } from '@oxog/log';
+
+const log = createLogger();
+log.info('Hello, world!');
+```
+
+## Installation
+
+```bash
+npm install @oxog/log
+```
+
+## Core API
+
+### Create Logger
+
+```ts
+const log = createLogger({ name: 'my-app', level: 'debug' });
+```
+
+### Log Levels
+
+```ts
+log.trace('trace');     // 10
+log.debug('debug');     // 20
+log.info('info');       // 30
+log.warn('warn');       // 40
+log.error('error');     // 50
+log.fatal('fatal');     // 60
+```
+
+### Structured Logging
+
+```ts
+log.info({ userId: 123, action: 'login' }, 'User logged in');
+// Output: {"level":30,"userId":123,"action":"login","msg":"User logged in"}
+```
+
+### Child Loggers
+
+```ts
+const dbLog = log.child({ module: 'database' });
+dbLog.info('Connected');
+// Output: {"level":30,"module":"database","msg":"Connected"}
+```
+
+### Correlation ID
+
+```ts
+const reqLog = log.withCorrelation('req-abc-123');
+reqLog.info('Step 1');
+reqLog.info('Step 2');
+// Both entries have: {"correlationId":"req-abc-123"}
+```
+
+### Performance Timing
+
+```ts
+log.time('operation');
+// ...do work...
+log.timeEnd('operation');
+// Output: {"level":30,"duration":45,"unit":"ms","msg":"operation"}
+
+const end = log.startTimer('api-call');
+await fetch('/api/data');
+end();
+```
+
+### Error Handling
+
+```ts
+try {
+  await riskyOperation();
+} catch (error) {
+  log.error(error, 'Operation failed');
+  // Includes error.stack automatically
+}
+
+log.fatal(new Error('Cannot start'), 'Fatal error');
+```
+
+### Level Management
+
+```ts
+log.setLevel('warn');
+log.debug('Hidden');  // Below minimum
+log.warn('Visible');   // Above minimum
+
+log.isLevelEnabled('error');  // true
+log.isLevelEnabled('debug');  // false
+```
+
+### Redaction
+
+```ts
+const log = createLogger({ redact: ['password', 'token'] });
+log.info({ password: 'secret' });
+// Output: {"password":"[REDACTED]"}
+```
+
+### Source Location
+
+```ts
+const log = createLogger({ source: true });
+log.info('Debug me');
+// Output: {"level":30,"file":"app.ts","line":42,"msg":"Debug me"}
+```
+
+### Multiple Formats
+
+```ts
+const jsonLog = createLogger({ format: 'json' });
+const prettyLog = createLogger({ format: 'pretty' });
+const autoLog = createLogger({ format: 'auto' });
+```
+
+### Transports
+
+```ts
+import { consoleTransport, fileTransport, streamTransport } from '@oxog/log';
+
+const log = createLogger({
+  transports: [
+    consoleTransport({ colors: true }),
+    fileTransport({ path: './app.log' }),
+    streamTransport({ stream: process.stdout })
+  ]
+});
+```
+
+### Plugin System
+
+```ts
+import { redactPlugin, sourcePlugin } from '@oxog/log';
+
+const log = createLogger({
+  plugins: [redactPlugin(['apiKey']), sourcePlugin()]
+});
+```
+
+### Browser Support
+
+```ts
+const log = createLogger();
+log.info('Hello from browser!');
+```
+
+### Graceful Shutdown
+
+```ts
+await log.flush();
+await log.destroy();
+```
+
+## Type Exports
+
+```ts
+import {
+  createLogger,
+  Logger,
+  LogLevel,
+  LogEntry,
+  LogPlugin,
+  Transport,
+  ConsoleTransportOptions,
+  FileTransportOptions,
+  HttpTransportOptions,
+  StreamTransportOptions,
+  LocalStorageTransportOptions
+} from '@oxog/log';
+
+import { levelPlugin, formatPlugin, timestampPlugin } from '@oxog/log/plugins';
+import { consoleTransport, fileTransport, streamTransport, httpTransport, localStorageTransport } from '@oxog/log/transports';
+```
+
+## Log Levels
+
+| Level | Value | Usage |
+|-------|--------|--------|
+| trace | 10 | Most detailed debugging info |
+| debug | 20 | Debugging information |
+| info | 30 | General informational messages |
+| warn | 40 | Warning messages |
+| error | 50 | Error conditions |
+| fatal | 60 | Critical errors causing failure |
+
+## License
+
+MIT © Ersin Koç
