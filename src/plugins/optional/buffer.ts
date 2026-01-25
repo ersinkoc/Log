@@ -93,8 +93,10 @@ export async function flushBuffer(ctx: LogContext): Promise<LogEntry[]> {
   await Promise.all(
     entries.flatMap((entry) =>
       ctx.transports.map((transport) =>
-        Promise.resolve(transport.write(entry)).catch(() => {
-          // Silently ignore individual transport errors
+        Promise.resolve(transport.write(entry)).catch((err) => {
+          // Emit transport error instead of silently ignoring
+          const error = err instanceof Error ? err : new Error(String(err));
+          ctx.emitter.emit('error', { transport: transport.name, error, entry });
         })
       )
     )
@@ -118,13 +120,20 @@ export function flushBufferSync(ctx: LogContext): LogEntry[] {
   const entries = ctx.buffer;
   ctx.buffer = [];
 
-  // Write all entries to transports (ignore promises)
+  // Write all entries to transports
   for (const entry of entries) {
     for (const transport of ctx.transports) {
       try {
-        transport.write(entry);
-      } catch {
-        // Silently ignore errors
+        // Prefer writeSync if available for truly synchronous flushing
+        if (transport.writeSync) {
+          transport.writeSync(entry);
+        } else {
+          transport.write(entry);
+        }
+      } catch (err) {
+        // Emit transport error
+        const error = err instanceof Error ? err : new Error(String(err));
+        ctx.emitter.emit('error', { transport: transport.name, error, entry });
       }
     }
   }

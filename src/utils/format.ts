@@ -12,6 +12,7 @@ import type { Pigment } from '@oxog/pigment';
 
 /**
  * Format a log entry as JSON string.
+ * Uses safe stringify to handle circular references.
  *
  * @example
  * ```typescript
@@ -20,7 +21,8 @@ import type { Pigment } from '@oxog/pigment';
  * ```
  */
 export function formatJson(entry: LogEntry): string {
-  return JSON.stringify(entry, jsonReplacer);
+  // Use safeStringify to handle circular references
+  return safeStringify(entry);
 }
 
 /**

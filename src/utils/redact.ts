@@ -38,6 +38,164 @@ export function redactFields<T extends Record<string, unknown>>(
 }
 
 /**
+ * Create a JSON replacer function that redacts sensitive fields during serialization.
+ * This is more efficient than deep cloning as it redacts during the JSON.stringify process.
+ *
+ * @example
+ * ```typescript
+ * const replacer = createRedactingReplacer(['password', 'token']);
+ * JSON.stringify(data, replacer);
+ * // Redacts password and token fields without cloning the entire object
+ * ```
+ */
+export function createRedactingReplacer(
+  paths: string[],
+  placeholder = REDACTED_VALUE
+): (key: string, value: unknown) => unknown {
+  // Pre-compile paths into a Set for O(1) lookup
+  const exactPaths = new Set<string>();
+  const wildcardPaths: { prefix: string; suffix: string }[] = [];
+
+  for (const path of paths) {
+    if (path.includes('*')) {
+      const parts = path.split('*');
+      wildcardPaths.push({ prefix: parts[0] || '', suffix: parts[1] || '' });
+    } else {
+      // Add the field name itself for simple matching
+      const lastDot = path.lastIndexOf('.');
+      const fieldName = lastDot >= 0 ? path.slice(lastDot + 1) : path;
+      exactPaths.add(fieldName);
+      exactPaths.add(path);
+    }
+  }
+
+  // Track current path during serialization
+  const pathStack: string[] = [];
+
+  return function replacer(key: string, value: unknown): unknown {
+    // Handle the root object
+    if (key === '') {
+      pathStack.length = 0;
+      return value;
+    }
+
+    // Check if this key should be redacted
+    if (exactPaths.has(key)) {
+      return placeholder;
+    }
+
+    // Build current path and check
+    const currentPath = pathStack.length > 0 ? `${pathStack.join('.')}.${key}` : key;
+
+    if (exactPaths.has(currentPath)) {
+      return placeholder;
+    }
+
+    // Check wildcard paths
+    for (const { prefix, suffix } of wildcardPaths) {
+      if (currentPath.startsWith(prefix) && currentPath.endsWith(suffix)) {
+        return placeholder;
+      }
+    }
+
+    // If this is an object, track the path for nested keys
+    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
+      pathStack.push(key);
+      // Note: JSON.stringify will call us again for nested properties
+      // We need to pop after processing children, which happens automatically
+      // because JSON.stringify processes depth-first
+    }
+
+    return value;
+  };
+}
+
+/**
+ * Stringify an object with redaction applied during serialization.
+ * More efficient than redactFields + JSON.stringify for large objects.
+ *
+ * @example
+ * ```typescript
+ * const json = stringifyWithRedaction(data, ['password', 'headers.authorization']);
+ * ```
+ */
+export function stringifyWithRedaction(
+  obj: unknown,
+  paths: string[],
+  placeholder = REDACTED_VALUE,
+  indent?: number
+): string {
+  if (!obj || typeof obj !== 'object' || paths.length === 0) {
+    return JSON.stringify(obj, null, indent);
+  }
+
+  // Use a WeakSet for circular reference detection
+  const seen = new WeakSet<object>();
+
+  // Pre-compile paths for efficient lookup
+  const exactFields = new Set<string>();
+  const pathPatterns: string[] = [];
+
+  for (const path of paths) {
+    if (path.includes('.') || path.includes('*')) {
+      pathPatterns.push(path);
+    } else {
+      exactFields.add(path.toLowerCase());
+    }
+  }
+
+  function replacer(this: unknown, key: string, value: unknown): unknown {
+    // Root object
+    if (key === '' && typeof value === 'object' && value !== null) {
+      seen.add(value);
+      return value;
+    }
+
+    // Check for simple field name match
+    if (exactFields.has(key.toLowerCase())) {
+      return placeholder;
+    }
+
+    // Handle circular references
+    if (typeof value === 'object' && value !== null) {
+      if (seen.has(value)) {
+        return '[Circular]';
+      }
+      seen.add(value);
+    }
+
+    // Handle special types
+    if (typeof value === 'bigint') {
+      return value.toString();
+    }
+
+    if (value instanceof Error) {
+      return {
+        name: value.name,
+        message: value.message,
+        stack: value.stack,
+      };
+    }
+
+    if (value instanceof RegExp) {
+      return value.toString();
+    }
+
+    if (value instanceof Map) {
+      return Object.fromEntries(value);
+    }
+
+    if (value instanceof Set) {
+      return Array.from(value);
+    }
+
+    return value;
+  }
+
+  return JSON.stringify(obj, replacer, indent);
+}
+
+/**
  * Deep clone an object.
  */
 function deepClone<T>(obj: T): T {

@@ -47,6 +47,34 @@ and this project adheres to [Semantic Versioning](https://semver.org/spec/v2.0.0
 - @oxog/pigment ^1.0.0
 - @oxog/emitter ^1.0.0
 
+## [1.0.1] - 2026-01-25
+
+### Fixed
+
+- **Sync logging now truly blocks** - Added `writeSync` method to Transport interface. Fatal and error logs now use synchronous writes to ensure they are written before process exit.
+- **Transport errors are no longer silently swallowed** - Added `error` event to LogEvents. Transport failures now emit events and write to stderr as fallback.
+- **Circular reference handling in formatJson** - `formatJson` now uses `safeStringify` internally to handle circular references without throwing.
+- **Buffer flush on close** - Logger properly flushes internal buffer and stops flush interval timer on close.
+
+### Added
+
+- `Transport.writeSync(entry)` - Optional synchronous write method for transports
+- `TransportErrorPayload` type for error events
+- `LogEvents.error` event for transport failure notifications
+- `stringifyWithRedaction(obj, paths)` - Efficient redaction during JSON serialization without deep cloning
+- `createRedactingReplacer(paths)` - Create JSON replacer function for streaming redaction
+
+### Changed
+
+- `formatJson` now uses `safeStringify` internally for circular reference safety
+- Console transport implements `writeSync` using `process.stdout/stderr.write`
+- File transport implements `writeSync` using `fs.appendFileSync`
+- Buffer plugin's `flushBufferSync` now prefers `writeSync` when available
+
+### Performance
+
+- New `stringifyWithRedaction` function is more efficient than `redactFields + JSON.stringify` for large objects as it avoids deep cloning
+
 ## [Unreleased]
 
 ### Planned

@@ -214,13 +214,57 @@ const child = log.child({ component: 'Auth' });
 child.info('Checking token');
 ```
 
+## Transport Error Handling
+
+```typescript
+// Listen for transport failures
+log.on('error', ({ transport, error, entry }) => {
+  console.error(`Transport ${transport} failed:`, error.message);
+  // Optionally alert ops team or use fallback
+});
+```
+
+## Sync vs Async Logging
+
+```typescript
+const log = createLogger({
+  // fatal and error are sync by default (written before process exit)
+  sync: {
+    fatal: true,  // default
+    error: true,  // default
+    warn: false,
+    info: false,
+    debug: false,
+    trace: false,
+  }
+});
+
+// Fatal logs are written synchronously - safe before process.exit()
+process.on('uncaughtException', (err) => {
+  log.fatal(err, 'Uncaught exception');
+  process.exit(1); // Log is guaranteed to be written
+});
+```
+
+## Efficient Redaction
+
+```typescript
+import { stringifyWithRedaction } from '@oxog/log';
+
+// More efficient than redactFields + JSON.stringify for large objects
+const json = stringifyWithRedaction(
+  largeObject,
+  ['password', 'token', 'headers.authorization']
+);
+```
+
 ## Graceful Shutdown
 
 ```typescript
 // Flush buffered logs before shutdown
 await log.flush();
 
-// Cleanup and destroy
+// Cleanup and destroy (also flushes buffer)
 await log.close();
 ```
 

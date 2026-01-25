@@ -1,6 +1,6 @@
 {
   "name": "@oxog/log",
-  "version": "1.0.0",
+  "version": "1.0.1",
   "description": "Blazing fast, plugin-based logging with @oxog ecosystem integration, colored output, and swappable transports",
   "type": "module",
   "main": "./dist/index.cjs",

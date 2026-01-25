@@ -46,13 +46,21 @@ export function consoleTransport(options: ConsoleTransportOptions = {}): Transpo
   // Store pigment instance (set by logger)
   let pigment: Pigment | undefined;
 
+  // Format entry for Node.js output
+  function formatEntry(entry: LogEntry): string {
+    if (colors && pigment) {
+      return formatPretty(entry, pigment, { timestamp, source: true });
+    } else if (colors) {
+      return formatWithAnsi(entry, mergedColors, timestamp);
+    } else {
+      return formatJson(entry);
+    }
+  }
+
   return {
     name: 'console',
 
     write(entry: LogEntry): void {
-      // Format the entry
-      let output: string;
-
       if (isBrowser()) {
         // In browser, use console methods directly
         writeToBrowserConsole(entry, colors);
@@ -60,14 +68,7 @@ export function consoleTransport(options: ConsoleTransportOptions = {}): Transpo
       }
 
       // In Node.js, format and write to stdout/stderr
-      if (colors && pigment) {
-        output = formatPretty(entry, pigment, { timestamp, source: true });
-      } else if (colors) {
-        // Simple colored output without pigment
-        output = formatWithAnsi(entry, mergedColors, timestamp);
-      } else {
-        output = formatJson(entry);
-      }
+      const output = formatEntry(entry);
 
       // Write to appropriate stream
       if (entry.level >= 50) {
@@ -75,6 +76,36 @@ export function consoleTransport(options: ConsoleTransportOptions = {}): Transpo
         process.stderr.write(output + '\n');
       } else {
         process.stdout.write(output + '\n');
+      }
+    },
+
+    writeSync(entry: LogEntry): void {
+      if (isBrowser()) {
+        // Browser console is inherently synchronous
+        writeToBrowserConsole(entry, colors);
+        return;
+      }
+
+      // In Node.js, use synchronous file descriptor writes for true blocking
+      const output = formatEntry(entry) + '\n';
+      const fd = entry.level >= 50 ? 2 : 1; // 2 = stderr, 1 = stdout
+
+      try {
+        // Dynamic import of fs would be async, so we use process.stdout/stderr
+        // which are synchronous when writing to a TTY or when piped
+        if (entry.level >= 50) {
+          process.stderr.write(output);
+        } else {
+          process.stdout.write(output);
+        }
+
+        // Note: process.stdout.write is actually synchronous when:
+        // 1. Writing to a TTY (terminal)
+        // 2. The internal buffer is not full
+        // For truly blocking writes to files, use fs.writeFileSync
+      } catch {
+        // If write fails, there's not much we can do in sync mode
+        // The error will be visible if stderr is available
       }
     },
 

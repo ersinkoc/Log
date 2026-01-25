@@ -204,6 +204,52 @@ export function fileTransport(options: FileTransportOptions): Transport {
       });
     },
 
+    writeSync(entry: LogEntry): void {
+      // Ensure modules are loaded synchronously (they should be by now)
+      // This is a synchronous fallback for critical logs
+      if (!fs) {
+        // Lazy load synchronously - this works because require is sync
+        // In ESM, we need to handle this differently
+        try {
+          // For critical sync writes, we attempt direct file write
+          const fsSync = require('fs') as typeof import('fs');
+          const pathSync = require('path') as typeof import('path');
+
+          // Ensure directory exists
+          const dir = pathSync.dirname(filePath);
+          if (!fsSync.existsSync(dir)) {
+            fsSync.mkdirSync(dir, { recursive: true });
+          }
+
+          // Format and write synchronously
+          const line = formatJson(entry) + '\n';
+          fsSync.appendFileSync(filePath, line, 'utf8');
+          currentSize += Buffer.byteLength(line, 'utf8');
+        } catch {
+          // If sync write fails, fall through to stderr as last resort
+          process.stderr.write(formatJson(entry) + '\n');
+        }
+        return;
+      }
+
+      try {
+        // Format entry
+        const line = formatJson(entry) + '\n';
+
+        // Write synchronously using appendFileSync
+        fs.appendFileSync(filePath, line, 'utf8');
+        currentSize += Buffer.byteLength(line, 'utf8');
+      } catch (err) {
+        // If sync write fails, write to stderr as fallback
+        process.stderr.write(formatJson(entry) + '\n');
+        throw new TransportError(
+          `Failed to write sync to file: ${err instanceof Error ? err.message : String(err)}`,
+          'file',
+          err instanceof Error ? err : undefined
+        );
+      }
+    },
+
     async flush(): Promise<void> {
       if (writeStream && 'flush' in writeStream) {
         return new Promise<void>((resolve) => {

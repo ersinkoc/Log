@@ -152,6 +152,30 @@ const log = createLogger();
 log.info('Hello from browser!');
 ```
 
+### Transport Error Handling
+
+```ts
+log.on('error', ({ transport, error, entry }) => {
+  console.error(`${transport} failed:`, error.message);
+});
+```
+
+### Sync Logging for Critical Logs
+
+```ts
+// Fatal/error logs are sync by default - written before process.exit()
+const log = createLogger({
+  sync: { fatal: true, error: true }
+});
+```
+
+### Efficient Redaction
+
+```ts
+import { stringifyWithRedaction } from '@oxog/log';
+const json = stringifyWithRedaction(data, ['password', 'token']);
+```
+
 ### Graceful Shutdown
 
 ```ts

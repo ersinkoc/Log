@@ -2,7 +2,7 @@ export const PACKAGE_NAME = '@oxog/log';
 export const PACKAGE_SHORT_NAME = 'log';
 export const GITHUB_REPO = 'ersinkoc/log';
 export const NPM_PACKAGE = '@oxog/log';
-export const VERSION = '1.0.0';
+export const VERSION = '1.0.1';
 export const DESCRIPTION = 'Blazing fast, plugin-based logging for Node.js and browsers';
 export const DOMAIN = 'log.oxog.dev';
 

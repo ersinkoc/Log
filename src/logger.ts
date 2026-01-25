@@ -129,7 +129,39 @@ export function createLogger(options: LoggerOptions = {}): Logger {
   // Track if logger is closed
   let closed = false;
 
-  // Write to transports
+  // Emit transport error
+  function emitTransportError(transportName: string, error: unknown, entry?: LogEntry): void {
+    const err = error instanceof Error ? error : new Error(String(error));
+    emitter.emit('error', { transport: transportName, error: err, entry });
+
+    // Fallback to stderr for critical visibility
+    if (isNode()) {
+      process.stderr.write(`[LOG TRANSPORT ERROR] ${transportName}: ${err.message}\n`);
+    }
+  }
+
+  // Write to transports synchronously (blocking)
+  function writeToTransportsSync(entry: LogEntry): void {
+    if (closed) return;
+
+    for (const transport of activeTransports) {
+      try {
+        if (transport.writeSync) {
+          transport.writeSync(entry);
+        } else {
+          // Fallback to async write but don't await (best effort)
+          const result = transport.write(entry);
+          if (result instanceof Promise) {
+            result.catch((err) => emitTransportError(transport.name, err, entry));
+          }
+        }
+      } catch (err) {
+        emitTransportError(transport.name, err, entry);
+      }
+    }
+  }
+
+  // Write to transports asynchronously
   async function writeToTransports(entry: LogEntry): Promise<void> {
     if (closed) return;
 
@@ -139,15 +171,19 @@ export function createLogger(options: LoggerOptions = {}): Logger {
       try {
         const result = transport.write(entry);
         if (result instanceof Promise) {
-          promises.push(result);
+          promises.push(
+            result.catch((err) => {
+              emitTransportError(transport.name, err, entry);
+            })
+          );
         }
       } catch (err) {
-        // Silently ignore transport errors
+        emitTransportError(transport.name, err, entry);
       }
     }
 
     if (promises.length > 0) {
-      await Promise.all(promises).catch(() => {});
+      await Promise.all(promises);
     }
   }
 
@@ -229,11 +265,13 @@ export function createLogger(options: LoggerOptions = {}): Logger {
     emitter.emit(`log:${levelName}` as keyof LogEvents, entry);
 
     if (shouldSync(levelName)) {
-      // Sync write - fire and forget but block
-      writeToTransports(entry).catch(() => {});
+      // Sync write - truly blocking for critical logs
+      writeToTransportsSync(entry);
     } else {
       // Async write
-      writeToTransports(entry).catch(() => {});
+      writeToTransports(entry).catch((err) => {
+        emitTransportError('logger', err, entry);
+      });
     }
   }
 
@@ -379,10 +417,10 @@ export function createLogger(options: LoggerOptions = {}): Logger {
           try {
             const result = transport.flush();
             if (result instanceof Promise) {
-              promises.push(result);
+              promises.push(result.catch((err) => emitTransportError(transport.name, err)));
             }
-          } catch {
-            // Silently ignore flush errors
+          } catch (err) {
+            emitTransportError(transport.name, err);
           }
         }
       }
@@ -395,7 +433,38 @@ export function createLogger(options: LoggerOptions = {}): Logger {
       if (closed) return;
       closed = true;
 
-      // Flush first
+      // Stop flush interval timer if running
+      const ctx = kernel.getContext();
+      if (ctx.flushTimerId) {
+        clearInterval(ctx.flushTimerId);
+        ctx.flushTimerId = undefined;
+      }
+
+      // Flush internal buffer if any entries are pending
+      if (ctx.buffer && ctx.buffer.length > 0) {
+        const bufferedEntries = ctx.buffer;
+        ctx.buffer = [];
+
+        // Write buffered entries synchronously to ensure they're not lost
+        for (const entry of bufferedEntries) {
+          for (const transport of activeTransports) {
+            try {
+              if (transport.writeSync) {
+                transport.writeSync(entry);
+              } else {
+                const result = transport.write(entry);
+                if (result instanceof Promise) {
+                  await result.catch((err) => emitTransportError(transport.name, err, entry));
+                }
+              }
+            } catch (err) {
+              emitTransportError(transport.name, err, entry);
+            }
+          }
+        }
+      }
+
+      // Flush transport buffers
       await logger.flush();
 
       // Close transports
@@ -406,10 +475,10 @@ export function createLogger(options: LoggerOptions = {}): Logger {
           try {
             const result = transport.close();
             if (result instanceof Promise) {
-              promises.push(result);
+              promises.push(result.catch((err) => emitTransportError(transport.name, err)));
             }
-          } catch {
-            // Silently ignore close errors
+          } catch (err) {
+            emitTransportError(transport.name, err);
           }
         }
       }

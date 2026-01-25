@@ -134,6 +134,10 @@ export interface LogEntry {
  *   write(entry) {
  *     console.log(JSON.stringify(entry));
  *   },
+ *   writeSync(entry) {
+ *     // Blocking write for critical logs
+ *     fs.writeFileSync('/var/log/app.log', JSON.stringify(entry) + '\n', { flag: 'a' });
+ *   },
  * };
  * ```
  */
@@ -146,6 +150,13 @@ export interface Transport {
    * Can be sync or async.
    */
   write(entry: LogEntry): MaybePromise<void>;
+
+  /**
+   * Write a log entry synchronously (blocking).
+   * Used for fatal/error logs to ensure they are written before process exit.
+   * Falls back to write() if not implemented.
+   */
+  writeSync?(entry: LogEntry): void;
 
   /**
    * Flush any buffered entries.
@@ -339,12 +350,29 @@ export interface LogContext {
 // ============================================================================
 
 /**
+ * Transport error payload for error events.
+ */
+export interface TransportErrorPayload {
+  /** Transport name that failed */
+  transport: string;
+  /** The error that occurred */
+  error: Error;
+  /** The log entry that failed to write (if available) */
+  entry?: LogEntry;
+}
+
+/**
  * Log events for subscription via @oxog/emitter.
  *
  * @example
  * ```typescript
  * log.on('log:error', (entry) => {
  *   alertTeam(entry);
+ * });
+ *
+ * // Listen for transport errors
+ * log.on('error', ({ transport, error }) => {
+ *   console.error(`Transport ${transport} failed:`, error);
  * });
  * ```
  */
@@ -378,6 +406,9 @@ export interface LogEvents {
 
   /** Emitted when logger is closed */
   close: void;
+
+  /** Emitted when a transport fails to write */
+  error: TransportErrorPayload;
 }
 
 /**
