@@ -13,3 +13,8 @@ website/dist
 website/.env.local
 website/.env
 *.tgz
+
+.dfmt/
+
+.claude/
+.freebuff/
