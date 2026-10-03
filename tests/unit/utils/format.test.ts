@@ -208,6 +208,32 @@ describe('format', () => {
       const result = safeStringify(obj);
       expect(result).toContain('12345');
     });
+
+    it('should preserve a shared reference instead of marking it circular', () => {
+      const user = { id: 1, name: 'alice' };
+      const result = JSON.parse(safeStringify({ owner: user, viewer: user }));
+      expect(result.owner.name).toBe('alice');
+      expect(result.viewer.name).toBe('alice');
+    });
+
+    it('should preserve a shared reference nested in several branches', () => {
+      const shared = { user: { id: 1 }, roles: ['admin'] };
+      const result = JSON.parse(safeStringify({ graph: shared, shared }));
+      expect(result.graph.roles).toEqual(['admin']);
+      expect(result.shared.roles).toEqual(['admin']);
+    });
+
+    it('should still mark an indirect cycle as circular', () => {
+      const parent: Record<string, unknown> = { name: 'p', nested: {} };
+      (parent.nested as Record<string, unknown>).parent = parent;
+      expect(safeStringify(parent)).toContain('[Circular]');
+    });
+
+    it('should still mark a cycle through an array', () => {
+      const arr: unknown[] = [1];
+      arr.push(arr);
+      expect(safeStringify({ arr })).toContain('[Circular]');
+    });
   });
 
   describe('formatTime', () => {
@@ -301,6 +327,21 @@ describe('format', () => {
     it('should handle exact length', () => {
       const str = 'hello';
       expect(truncate(str, 5)).toBe('hello');
+    });
+
+    it('should not exceed the budget when it is smaller than the suffix', () => {
+      expect(truncate('Hello world', 2).length).toBeLessThanOrEqual(2);
+      expect(truncate('Hello world', 1).length).toBeLessThanOrEqual(1);
+    });
+
+    it('should return an empty string for a non-positive budget', () => {
+      expect(truncate('Hello world', 0)).toBe('');
+      expect(truncate('Hello world', -5)).toBe('');
+    });
+
+    it('should respect a multi-byte suffix', () => {
+      expect(truncate('abcdef', 2, '…').length).toBe(2);
+      expect(truncate('abcdef', 4, '').length).toBe(4);
     });
   });
 

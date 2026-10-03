@@ -7,6 +7,7 @@
  */
 
 import type { Transport, LogEntry, HttpTransportOptions } from '../types.js';
+import { safeStringify } from '../utils/format.js';
 import { TransportError } from '../errors.js';
 
 /**
@@ -84,6 +85,21 @@ export function httpTransport(options: HttpTransportOptions): Transport {
     }
   }
 
+  // Wait for an in-flight send, then make one final flush attempt.
+  // Used by close() so entries buffered during an in-flight send are not lost.
+  // Deliberately bounded: retrying until the buffer empties would hang close()
+  // forever whenever the endpoint keeps failing, since every failed attempt
+  // re-queues its entries.
+  async function drainBuffer(): Promise<void> {
+    const deadline = Date.now() + 5000;
+    while (isFlushing && Date.now() < deadline) {
+      await new Promise((resolve) => setTimeout(resolve, 10));
+    }
+    await flushBuffer().catch(() => {
+      // Entries stay buffered; nothing more can be retried once closed.
+    });
+  }
+
   // Send entries with retry
   async function sendWithRetry(entries: LogEntry[]): Promise<void> {
     let lastError: Error | null = null;
@@ -112,7 +128,10 @@ export function httpTransport(options: HttpTransportOptions): Transport {
 
   // Send entries to endpoint
   async function sendEntries(entries: LogEntry[]): Promise<void> {
-    const body = JSON.stringify(entries);
+    // safeStringify, not JSON.stringify: a single circular reference or BigInt
+    // would otherwise throw, be re-queued at the head of the buffer, and block
+    // every subsequent batch from ever being delivered.
+    const body = safeStringify(entries);
 
     const response = await fetch(url, {
       method,
@@ -169,14 +188,11 @@ export function httpTransport(options: HttpTransportOptions): Transport {
 
       stopFlushInterval();
 
-      // Final flush
-      if (buffer.length > 0) {
-        try {
-          await flushBuffer();
-        } catch {
-          // Ignore errors on close
-        }
-      }
+      // Final flush. drainBuffer() waits for an in-flight send and keeps
+      // flushing, so entries buffered while that send was running are not lost.
+      await drainBuffer().catch(() => {
+        // Ignore errors on close
+      });
     },
 
     supports(_env: 'node' | 'browser'): boolean {

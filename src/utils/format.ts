@@ -11,6 +11,32 @@ import { LEVEL_LABELS, LEVEL_COLORS } from '../constants.js';
 import type { Pigment } from '@oxog/pigment';
 
 /**
+ * Marker written in place of a circular value.
+ */
+const CIRCULAR = '[Circular]';
+
+/**
+ * One open object on the path currently being serialized.
+ *
+ * `JSON.stringify` has no "exit" callback, so a replacer cannot pop its own
+ * stack when it leaves an object. Each frame records the object whose properties
+ * are being visited (`holder`, i.e. the replacer's `this`) and the value returned
+ * for that key (`value`); a frame stays open exactly while we are still inside
+ * `value`, so the stack is unwound by dropping trailing frames whose `value` is
+ * no longer the current holder.
+ */
+interface StringifyFrame {
+  holder: unknown;
+  value: unknown;
+}
+
+function unwindStack(stack: StringifyFrame[], holder: unknown): void {
+  while (stack.length > 0 && stack[stack.length - 1].value !== holder) {
+    stack.pop();
+  }
+}
+
+/**
  * Format a log entry as JSON string.
  * Uses safe stringify to handle circular references.
  *
@@ -88,20 +114,28 @@ function jsonReplacer(_key: string, value: unknown): unknown {
  * ```
  */
 export function safeStringify(value: unknown, indent?: number): string {
-  const seen = new WeakSet<object>();
+  // Objects we are currently inside, so only true cycles are replaced.
+  const stack: StringifyFrame[] = [];
 
   return JSON.stringify(
     value,
-    (_key, val) => {
+    function (this: unknown, _key, val) {
+      unwindStack(stack, this);
+
       // First apply the standard replacer
       const replaced = jsonReplacer(_key, val);
 
-      // Then check for circular references
+      // Then check for circular references: a value is circular only when it is
+      // an object we are already inside. A value referenced twice is not.
       if (typeof replaced === 'object' && replaced !== null) {
-        if (seen.has(replaced)) {
-          return '[Circular]';
+        for (const frame of stack) {
+          if (frame.value === replaced) {
+            return CIRCULAR;
+          }
         }
-        seen.add(replaced);
+        // JSON.stringify descends into the object we return here, so this is the
+        // object later calls will report as their holder.
+        stack.push({ holder: this, value: replaced });
       }
 
       return replaced;
@@ -271,7 +305,12 @@ export function formatBytes(bytes: number): string {
  */
 export function truncate(str: string, maxLength: number, suffix = '...'): string {
   if (str.length <= maxLength) return str;
-  return str.slice(0, maxLength - suffix.length) + suffix;
+  if (maxLength <= 0) return '';
+  const keep = maxLength - suffix.length;
+  // The suffix alone would already exceed the budget, so cut hard instead of
+  // passing a negative end index to slice (which counts from the end).
+  if (keep <= 0) return str.slice(0, maxLength);
+  return str.slice(0, keep) + suffix;
 }
 
 /**

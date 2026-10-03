@@ -263,4 +263,86 @@ describe('fileTransport', () => {
       await expect(transport.close?.()).resolves.toBeUndefined();
     });
   });
+
+  describe('writeSync', () => {
+    const syncEntry = (msg: string): LogEntry => ({
+      level: 50,
+      levelName: 'error',
+      time: Date.now(),
+      msg,
+    });
+
+    it('should write the first sync entry to the log file, not stderr', () => {
+      const target = path.join(testDir, 'sync.log');
+      const transport = fileTransport({ path: target });
+
+      transport.writeSync(syncEntry('critical failure'));
+
+      expect(fs.existsSync(target)).toBe(true);
+      expect(fs.readFileSync(target, 'utf8')).toContain('critical failure');
+    });
+
+    it('should create missing parent directories on a sync write', () => {
+      const target = path.join(testDir, 'deeply', 'nested', 'sync.log');
+      const transport = fileTransport({ path: target });
+
+      transport.writeSync(syncEntry('nested target'));
+
+      expect(fs.existsSync(target)).toBe(true);
+      expect(fs.readFileSync(target, 'utf8')).toContain('nested target');
+    });
+
+    it('should append repeated sync writes in order', () => {
+      const target = path.join(testDir, 'append.log');
+      const transport = fileTransport({ path: target });
+
+      for (let i = 0; i < 5; i++) {
+        transport.writeSync(syncEntry(`entry ${i}`));
+      }
+
+      const lines = fs.readFileSync(target, 'utf8').trim().split('\n');
+      expect(lines).toHaveLength(5);
+      expect(lines[0]).toContain('entry 0');
+      expect(lines[4]).toContain('entry 4');
+    });
+
+    it('should honour maxSize for sync traffic', () => {
+      const target = path.join(testDir, 'rotated.log');
+      const transport = fileTransport({ path: target, maxSize: '1KB', maxFiles: 3 });
+
+      for (let i = 0; i < 20; i++) {
+        transport.writeSync(syncEntry(`${i}:` + 'x'.repeat(400)));
+      }
+
+      expect(fs.statSync(target).size).toBeLessThanOrEqual(1024);
+      const rotated = fs.readdirSync(testDir).filter((f) => f.startsWith('rotated.') && f !== 'rotated.log');
+      expect(rotated.length).toBeGreaterThan(0);
+      // maxFiles rotated files plus the active one.
+      expect(fs.readdirSync(testDir).filter((f) => f.startsWith('rotated.')).length).toBeLessThanOrEqual(4);
+    });
+
+    it('should not rotate when no maxSize is configured', () => {
+      const target = path.join(testDir, 'norotate.log');
+      const transport = fileTransport({ path: target });
+
+      for (let i = 0; i < 10; i++) {
+        transport.writeSync(syncEntry(`x${i}`));
+      }
+
+      expect(fs.readdirSync(testDir).filter((f) => f.startsWith('norotate'))).toHaveLength(1);
+    });
+
+    it('should support sync writes with compression enabled', () => {
+      const target = path.join(testDir, 'zipped.log');
+      const transport = fileTransport({ path: target, maxSize: '512B', maxFiles: 3, compress: true });
+
+      for (let i = 0; i < 8; i++) {
+        transport.writeSync(syncEntry(`${i}:` + 'x'.repeat(200)));
+      }
+
+      const files = fs.readdirSync(testDir).filter((f) => f.startsWith('zipped.'));
+      expect(files.length).toBeGreaterThan(0);
+      expect(files.every((f) => f === 'zipped.log' || f.endsWith('.gz') || f.endsWith('.log'))).toBe(true);
+    });
+  });
 });

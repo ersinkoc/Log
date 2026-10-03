@@ -202,8 +202,12 @@ export function isInternalFrame(
       // Path pattern
       return pathToCheck.includes(pattern);
     }
-    // File name pattern
-    return location.file === pattern || location.file.includes(pattern);
+    // Bare pattern such as "node_modules": it identifies a directory, so it
+    // can only ever appear in the path — comparing it against the bare file
+    // name ("index.js") never matched and let library frames through.
+    return pathToCheck.includes(pattern) ||
+      location.file === pattern ||
+      location.file.includes(pattern);
   });
 }
 

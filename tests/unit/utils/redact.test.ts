@@ -1,5 +1,12 @@
 import { describe, it, expect } from 'vitest';
-import { redactFields, isSensitive, createRedactor, autoRedact } from '../../../src/utils/redact.js';
+import {
+  redactFields,
+  isSensitive,
+  createRedactor,
+  autoRedact,
+  createRedactingReplacer,
+  stringifyWithRedaction,
+} from '../../../src/utils/redact.js';
 
 describe('redact', () => {
   describe('redactFields', () => {
@@ -217,6 +224,156 @@ describe('redact', () => {
       const result = autoRedact(obj);
       expect(result.apiKey).toBe('[REDACTED]');
       expect(result.token).toBe('[REDACTED]');
+    });
+  });
+
+  describe('circular references', () => {
+    it('should not overflow the stack on a self-referencing entry', () => {
+      const entry: Record<string, unknown> = { msg: 'failed', err: { message: 'boom' } };
+      (entry.err as Record<string, unknown>).context = entry;
+
+      const result = redactFields(entry, ['password']);
+      expect((result.err as Record<string, unknown>).context).toBe('[Circular]');
+    });
+
+    it('should handle a root self-reference', () => {
+      const obj: Record<string, unknown> = { name: 'x' };
+      obj.self = obj;
+      expect(redactFields(obj, ['password']).self).toBe('[Circular]');
+    });
+
+    it('should handle mutually circular objects', () => {
+      const a: Record<string, unknown> = { id: 'a' };
+      const b: Record<string, unknown> = { id: 'b', a };
+      a.b = b;
+      expect((redactFields(a, ['password']).b as Record<string, unknown>).a).toBe('[Circular]');
+    });
+
+    it('should handle a circular array', () => {
+      const list: unknown[] = [1, 2];
+      list.push(list);
+      expect(redactFields({ list }, ['password']).list[2]).toBe('[Circular]');
+    });
+
+    it('should clone a shared reference once per branch', () => {
+      const shared = { keep: 1 };
+      const result = redactFields({ x: shared, y: shared }, ['password']);
+      expect(result.x).not.toBe(result.y);
+      expect(result.x.keep).toBe(1);
+      expect(result.y.keep).toBe(1);
+    });
+
+    it('should still redact acyclic entries', () => {
+      const result = redactFields(
+        { user: { name: 'a', password: 'p' }, rows: [{ token: 't' }] },
+        ['user.password', 'rows.[*].token']
+      );
+      expect(result.user.password).toBe('[REDACTED]');
+      expect(result.rows[0].token).toBe('[REDACTED]');
+      expect(result.user.name).toBe('a');
+    });
+  });
+
+  describe('stringifyWithRedaction', () => {
+    it('should redact flat fields', () => {
+      expect(JSON.parse(stringifyWithRedaction({ password: 'p', user: 'a' }, ['password']))).toEqual({
+        password: '[REDACTED]',
+        user: 'a',
+      });
+    });
+
+    it('should redact dotted paths', () => {
+      const result = JSON.parse(
+        stringifyWithRedaction(
+          { headers: { authorization: 'Bearer x', 'x-trace': 'ok' } },
+          ['headers.authorization']
+        )
+      );
+      expect(result.headers.authorization).toBe('[REDACTED]');
+      expect(result.headers['x-trace']).toBe('ok');
+    });
+
+    it('should redact wildcard paths, including array entries', () => {
+      const result = JSON.parse(
+        stringifyWithRedaction(
+          { items: [{ token: 'a' }, { token: 'b' }], other: { token: 'c' } },
+          ['items.*.token']
+        )
+      );
+      expect(result.items[0].token).toBe('[REDACTED]');
+      expect(result.items[1].token).toBe('[REDACTED]');
+      expect(result.other.token).toBe('c');
+    });
+
+    it('should redact array index notation', () => {
+      const result = JSON.parse(
+        stringifyWithRedaction({ rows: [{ secret: 'a' }, { secret: 'b' }] }, ['rows.[*].secret'])
+      );
+      expect(result.rows[0].secret).toBe('[REDACTED]');
+      expect(result.rows[1].secret).toBe('[REDACTED]');
+    });
+
+    it('should fall back to plain stringify without paths', () => {
+      expect(stringifyWithRedaction({ password: 'p' }, [])).toBe('{"password":"p"}');
+    });
+
+    it('should leave unknown paths untouched', () => {
+      expect(stringifyWithRedaction({ a: 1 }, ['nope.deep.path'])).toBe('{"a":1}');
+    });
+
+    it('should mark true cycles as circular', () => {
+      const selfish: Record<string, unknown> = { name: 'x' };
+      selfish.self = selfish;
+      expect(stringifyWithRedaction(selfish, ['password'])).toContain('[Circular]');
+    });
+
+    it('should preserve a shared reference', () => {
+      const user = { id: 1, name: 'alice' };
+      const result = JSON.parse(stringifyWithRedaction({ owner: user, viewer: user }, ['password']));
+      expect(result.viewer.name).toBe('alice');
+    });
+  });
+
+  describe('createRedactingReplacer', () => {
+    it('should match wildcard paths against the real path only', () => {
+      const replacer = createRedactingReplacer(['user.*.pin']);
+      const result = JSON.parse(
+        JSON.stringify(
+          {
+            user: { id: 1, pin: 'REAL' },
+            userId: { pin: 'UNRELATED' },
+            other: { deep: { pin: 'UNRELATED' } },
+          },
+          replacer
+        )
+      );
+      expect(result.user.pin).toBe('[REDACTED]');
+      expect(result.userId.pin).toBe('UNRELATED');
+      expect(result.other.deep.pin).toBe('UNRELATED');
+    });
+
+    it('should redact exact names at any depth', () => {
+      const result = JSON.parse(
+        JSON.stringify({ deep: { password: 'p' }, password: 'p' }, createRedactingReplacer(['password']))
+      );
+      expect(result.deep.password).toBe('[REDACTED]');
+      expect(result.password).toBe('[REDACTED]');
+    });
+
+    it('should redact dotted paths', () => {
+      const result = JSON.parse(
+        JSON.stringify({ headers: { authorization: 'a' } }, createRedactingReplacer(['headers.authorization']))
+      );
+      expect(result.headers.authorization).toBe('[REDACTED]');
+    });
+
+    it('should be reusable across serializations', () => {
+      const replacer = createRedactingReplacer(['user.*.pin']);
+      const first = JSON.parse(JSON.stringify({ user: { pin: '1' } }, replacer));
+      // A later serialization must not inherit state from the first one.
+      const second = JSON.parse(JSON.stringify({ userId: { pin: '3' } }, replacer));
+      expect(first.user.pin).toBe('[REDACTED]');
+      expect(second.userId.pin).toBe('3');
     });
   });
 });

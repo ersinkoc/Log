@@ -30,19 +30,36 @@ describe('source', () => {
   });
 
   describe('getCallerLocation', () => {
-    it('should return caller location', () => {
-      const location = getCallerLocation();
+    // NOTE (F19): the first three assertions used to be
+    // `expect(location).toHaveProperty('file')` / `toBeDefined()`. They passed
+    // vacuously: before the isInternalFrame fix a bare "node_modules" pattern
+    // was compared only against the bare file name ("index.js"), so it never
+    // matched and getCallerLocation() handed back the vitest runner's own file
+    // (node_modules/@vitest/runner/dist/index.js) as the "caller". Any frame at
+    // all satisfied those assertions. The checks below assert the real
+    // invariant - a library frame is never returned as the caller - and accept
+    // `undefined` when the stack holds no non-internal frame (the case under
+    // vitest, where every frame belongs to the runner).
+    function expectNoInternalFrame(location: ReturnType<typeof getCallerLocation>) {
+      if (location === undefined) return;
+      const pathToCheck = location.path || location.file;
+      expect(pathToCheck).not.toContain('node_modules');
+      expect(pathToCheck).not.toContain('@vitest');
+      expect(pathToCheck).not.toContain('node:internal');
+      expect(location.file).not.toBe('index.js');
       expect(location).toHaveProperty('file');
+    }
+
+    it('should never return a library frame as the caller', () => {
+      expectNoInternalFrame(getCallerLocation());
     });
 
     it('should respect depth parameter', () => {
-      const location = getCallerLocation(1);
-      expect(location).toBeDefined();
+      expectNoInternalFrame(getCallerLocation(1));
     });
 
     it('should skip internal frames with custom patterns', () => {
-      const location = getCallerLocation(0, []);
-      expect(location).toBeDefined();
+      expectNoInternalFrame(getCallerLocation(0, []));
     });
 
     it('should return undefined when all frames are internal', () => {

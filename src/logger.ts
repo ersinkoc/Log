@@ -62,8 +62,9 @@ export function createLogger(options: LoggerOptions = {}): Logger {
     plugins = [],
   } = options;
 
-  // Validate level
-  if (!(level in LOG_LEVELS)) {
+  // Validate level. `in` would also match Object.prototype keys such as
+  // "constructor" or "toString", so check for an own property instead.
+  if (!Object.prototype.hasOwnProperty.call(LOG_LEVELS, level)) {
     throw new ConfigError(`Invalid log level: ${level}`, 'level');
   }
 
@@ -197,13 +198,16 @@ export function createLogger(options: LoggerOptions = {}): Logger {
   ): LogEntry {
     const ctx = kernel.getContext();
 
+    // Bindings and caller data are spread first so that a payload key named
+    // "level", "levelName", "time" or "msg" cannot overwrite the entry's own
+    // metadata.
     const entry: LogEntry = {
+      ...ctx.bindings,
+      ...data,
       level: levelNum,
       levelName,
       time: Date.now(),
       msg,
-      ...ctx.bindings,
-      ...data,
     };
 
     // Add error if present
@@ -309,7 +313,7 @@ export function createLogger(options: LoggerOptions = {}): Logger {
     },
 
     setLevel(newLevel: LogLevelName): void {
-      if (!(newLevel in LOG_LEVELS)) {
+      if (!Object.prototype.hasOwnProperty.call(LOG_LEVELS, newLevel)) {
         throw new ConfigError(`Invalid log level: ${newLevel}`, 'level');
       }
       const ctx = kernel.getContext();
@@ -325,6 +329,9 @@ export function createLogger(options: LoggerOptions = {}): Logger {
       const ctx = kernel.getContext();
       return createLogger({
         ...options,
+        // Carry over the level currently in effect, not the one captured in
+        // options at construction time, so a runtime setLevel() is inherited.
+        level: LEVEL_NAMES[ctx.level] ?? level,
         context: { ...ctx.bindings, ...bindings },
         transports: activeTransports,
       });
@@ -336,6 +343,8 @@ export function createLogger(options: LoggerOptions = {}): Logger {
       const correlationId = id ?? generateCorrelationId();
       const childLogger = createLogger({
         ...options,
+        // Same as child(): inherit the level currently in effect.
+        level: LEVEL_NAMES[ctx.level] ?? level,
         context: { ...ctx.bindings },
         transports: activeTransports,
       });

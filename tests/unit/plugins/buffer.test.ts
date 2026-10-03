@@ -277,3 +277,74 @@ describe('stopFlushInterval', () => {
     expect(() => stopFlushInterval(ctx)).not.toThrow();
   });
 });
+
+describe('flushBufferSync async transports', () => {
+  const makeCtx = (transport: Transport, entries: LogEntry[]): LogContext => {
+    const emitter = createEmitter<{ error: unknown; flush: undefined }>();
+    return {
+      buffer: entries,
+      transports: [transport],
+      emitter: emitter as unknown as LogContext['emitter'],
+    } as unknown as LogContext;
+  };
+
+  const entry = (msg: string): LogEntry => ({ level: 30, levelName: 'info', time: Date.now(), msg });
+
+  it('should not leak an unhandled rejection when an async transport fails', async () => {
+    const unhandled: unknown[] = [];
+    const handler = (reason: unknown) => unhandled.push(reason);
+    process.on('unhandledRejection', handler);
+
+    const transport: Transport = {
+      name: 'flaky',
+      write: () => Promise.reject(new Error('transport exploded')),
+    };
+    const ctx = makeCtx(transport, [entry('a'), entry('b')]);
+
+    expect(() => flushBufferSync(ctx)).not.toThrow();
+
+    await new Promise((resolve) => setTimeout(resolve, 50));
+    process.off('unhandledRejection', handler);
+
+    expect(unhandled).toHaveLength(0);
+  });
+
+  it('should emit a transport error event instead', async () => {
+    const errors: Array<{ transport: string; error: Error }> = [];
+    const emitter = createEmitter<{ error: { transport: string; error: Error } }>();
+    emitter.on('error', (payload) => errors.push(payload));
+
+    const ctx = {
+      buffer: [entry('a')],
+      transports: [{ name: 'flaky', write: () => Promise.reject(new Error('boom')) } as Transport],
+      emitter: emitter as unknown as LogContext['emitter'],
+    } as unknown as LogContext;
+
+    flushBufferSync(ctx);
+    await new Promise((resolve) => setTimeout(resolve, 50));
+
+    expect(errors).toHaveLength(1);
+    expect(errors[0].transport).toBe('flaky');
+    expect(errors[0].error.message).toBe('boom');
+  });
+
+  it('should still prefer writeSync when available', () => {
+    const written: LogEntry[] = [];
+    const ctx = makeCtx(
+      {
+        name: 'sync',
+        write: () => {
+          throw new Error('async path should not be used');
+        },
+        writeSync: (e: LogEntry) => {
+          written.push(e);
+        },
+      },
+      [entry('a'), entry('b')]
+    );
+
+    flushBufferSync(ctx);
+
+    expect(written).toHaveLength(2);
+  });
+});

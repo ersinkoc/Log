@@ -52,8 +52,12 @@ export function sourcePlugin(options: SourcePluginOptions = {}): Plugin<LogConte
       // Enable source tracking in context
       ctx.source = true;
 
-      // Expose source location function with configured depth
-      const depth = options.depth ?? 4; // Skip internal frames
+      // Expose source location function with configured depth.
+      // Default is 0: getSourceLocation() already skips its own frame and the
+      // wrapper arrow below, so depth 0 lands on whoever called getSource().
+      // A higher default skipped that many *caller* frames instead, which
+      // reported node internals (or nothing at all) as the call site.
+      const depth = options.depth ?? 0;
 
       (kernel as unknown as { getSource: () => SourceLocation | undefined }).getSource = () => {
         return getSourceLocation(depth);
@@ -67,7 +71,7 @@ export function sourcePlugin(options: SourcePluginOptions = {}): Plugin<LogConte
  */
 export function addSourceLocation(
   entry: LogEntry,
-  depth = 4,
+  depth = 0,
   options: SourcePluginOptions = {}
 ): LogEntry {
   const location = getSourceLocation(depth);

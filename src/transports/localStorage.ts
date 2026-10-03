@@ -65,15 +65,19 @@ export function localStorageTransport(options: LocalStorageTransportOptions): Tr
 
   // Save logs
   function saveLogs(logs: LogEntry[]): void {
-    const data = JSON.stringify(logs);
-
-    // Check size
-    while (data.length > maxBytes && logs.length > 0) {
+    // Evict oldest entries until the payload fits. The serialized size is
+    // recomputed each iteration: re-testing a precomputed value made the loop
+    // run until the store was empty, wiping every log on the first oversized
+    // write. Sizes are compared in bytes to match maxBytes (getStorageUsage
+    // reports UTF-16 bytes, so a char count would silently double the cap).
+    while (logs.length > 0 && byteLength(JSON.stringify(logs)) > maxBytes) {
       logs.shift(); // Remove oldest
     }
 
+    const payload = JSON.stringify(logs);
+
     try {
-      getStorage().setItem(key, JSON.stringify(logs));
+      getStorage().setItem(key, payload);
     } catch (err) {
       // Storage full - try to clear some space
       if (logs.length > 10) {
@@ -81,6 +85,11 @@ export function localStorageTransport(options: LocalStorageTransportOptions): Tr
         saveLogs(logs);
       }
     }
+  }
+
+  // UTF-16 byte length, matching what getStorageUsage() reports.
+  function byteLength(str: string): number {
+    return str.length * 2;
   }
 
   // Check if level is allowed

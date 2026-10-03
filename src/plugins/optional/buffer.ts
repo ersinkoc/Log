@@ -128,7 +128,16 @@ export function flushBufferSync(ctx: LogContext): LogEntry[] {
         if (transport.writeSync) {
           transport.writeSync(entry);
         } else {
-          transport.write(entry);
+          // The async branch still returns a promise. It must be handled here:
+          // an ignored rejection from a failing transport becomes an unhandled
+          // rejection, which terminates the process on Node 15+.
+          const result = transport.write(entry);
+          if (result instanceof Promise) {
+            result.catch((err) => {
+              const error = err instanceof Error ? err : new Error(String(err));
+              ctx.emitter.emit('error', { transport: transport.name, error, entry });
+            });
+          }
         }
       } catch (err) {
         // Emit transport error

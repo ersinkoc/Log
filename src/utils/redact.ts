@@ -9,6 +9,67 @@
 import { REDACTED_VALUE } from '../constants.js';
 
 /**
+ * Marker written in place of a circular value, matching what the stringify
+ * helpers emit.
+ */
+const CIRCULAR = '[Circular]';
+
+/**
+ * One open object on the path currently being serialized.
+ *
+ * `JSON.stringify` has no "exit" callback, so a replacer cannot pop its own
+ * stack when it leaves an object. Instead every frame records the object whose
+ * properties are being visited (`holder`, i.e. the replacer's `this`) and the
+ * value returned for that key (`value`); a frame stays open exactly while we are
+ * still inside `value`, so the stack is unwound by dropping trailing frames
+ * whose `value` is no longer the current holder.
+ */
+interface ReplacerFrame {
+  holder: unknown;
+  key: string;
+  value: unknown;
+}
+
+/** Drop frames for objects we have already left. */
+function unwindStack(stack: ReplacerFrame[], holder: unknown): void {
+  while (stack.length > 0 && stack[stack.length - 1].value !== holder) {
+    stack.pop();
+  }
+}
+
+/** Current dot-notation path of a key inside the replacer stack. */
+function currentPath(stack: ReplacerFrame[], key: string): string {
+  const keys: string[] = [];
+  for (const frame of stack) {
+    // The root frame has an empty key; it must not add a leading dot.
+    if (frame.key !== '') keys.push(frame.key);
+  }
+  keys.push(key);
+  return keys.join('.');
+}
+
+/** Path segments of a key inside the replacer stack (array indices included). */
+function currentSegments(stack: ReplacerFrame[], key: string): string[] {
+  const segments: string[] = [];
+  for (const frame of stack) {
+    if (frame.key !== '') segments.push(frame.key);
+  }
+  segments.push(key);
+  return segments;
+}
+
+/** Match path segments against a pattern, honouring `*` and `[*]` wildcards. */
+function matchesSegments(pattern: string[], segments: string[]): boolean {
+  if (pattern.length !== segments.length) return false;
+  for (let i = 0; i < pattern.length; i++) {
+    const part = pattern[i];
+    if (part === '*' || part === '[*]') continue;
+    if (part !== segments[i]) return false;
+  }
+  return true;
+}
+
+/**
  * Redact sensitive fields from an object.
  *
  * @example
@@ -69,13 +130,15 @@ export function createRedactingReplacer(
     }
   }
 
-  // Track current path during serialization
-  const pathStack: string[] = [];
+  // Track the objects we are currently inside during serialization
+  const pathStack: ReplacerFrame[] = [];
 
-  return function replacer(key: string, value: unknown): unknown {
+  return function replacer(this: unknown, key: string, value: unknown): unknown {
+    unwindStack(pathStack, this);
+
     // Handle the root object
     if (key === '') {
-      pathStack.length = 0;
+      pathStack.push({ holder: this, key, value });
       return value;
     }
 
@@ -85,25 +148,23 @@ export function createRedactingReplacer(
     }
 
     // Build current path and check
-    const currentPath = pathStack.length > 0 ? `${pathStack.join('.')}.${key}` : key;
+    const path = currentPath(pathStack, key);
 
-    if (exactPaths.has(currentPath)) {
+    if (exactPaths.has(path)) {
       return placeholder;
     }
 
     // Check wildcard paths
     for (const { prefix, suffix } of wildcardPaths) {
-      if (currentPath.startsWith(prefix) && currentPath.endsWith(suffix)) {
+      if (path.startsWith(prefix) && path.endsWith(suffix)) {
         return placeholder;
       }
     }
 
-    // If this is an object, track the path for nested keys
-    if (value !== null && typeof value === 'object' && !Array.isArray(value)) {
-      pathStack.push(key);
-      // Note: JSON.stringify will call us again for nested properties
-      // We need to pop after processing children, which happens automatically
-      // because JSON.stringify processes depth-first
+    // Track objects so nested keys get an absolute path. Arrays are tracked
+    // too, so their entries appear in the path as index segments.
+    if (value !== null && typeof value === 'object') {
+      pathStack.push({ holder: this, key, value });
     }
 
     return value;
@@ -129,25 +190,30 @@ export function stringifyWithRedaction(
     return JSON.stringify(obj, null, indent);
   }
 
-  // Use a WeakSet for circular reference detection
-  const seen = new WeakSet<object>();
-
   // Pre-compile paths for efficient lookup
   const exactFields = new Set<string>();
-  const pathPatterns: string[] = [];
+  const pathPatterns: string[][] = [];
 
   for (const path of paths) {
     if (path.includes('.') || path.includes('*')) {
-      pathPatterns.push(path);
+      pathPatterns.push(path.split('.'));
     } else {
       exactFields.add(path.toLowerCase());
     }
   }
 
+  // Objects we are currently inside, used for both path matching and
+  // circular reference detection.
+  const stack: ReplacerFrame[] = [];
+
   function replacer(this: unknown, key: string, value: unknown): unknown {
+    unwindStack(stack, this);
+
     // Root object
-    if (key === '' && typeof value === 'object' && value !== null) {
-      seen.add(value);
+    if (key === '') {
+      if (value !== null && typeof value === 'object') {
+        stack.push({ holder: this, key, value });
+      }
       return value;
     }
 
@@ -156,12 +222,22 @@ export function stringifyWithRedaction(
       return placeholder;
     }
 
-    // Handle circular references
-    if (typeof value === 'object' && value !== null) {
-      if (seen.has(value)) {
-        return '[Circular]';
+    // Check dotted and wildcard paths against the absolute path of this key
+    const segments = currentSegments(stack, key);
+    for (const pattern of pathPatterns) {
+      if (matchesSegments(pattern, segments)) {
+        return placeholder;
       }
-      seen.add(value);
+    }
+
+    // Handle circular references: only an object we are currently inside is a
+    // cycle. A value merely referenced twice is serialized as usual.
+    if (typeof value === 'object' && value !== null) {
+      for (const frame of stack) {
+        if (frame.value === value) {
+          return CIRCULAR;
+        }
+      }
     }
 
     // Handle special types
@@ -169,12 +245,16 @@ export function stringifyWithRedaction(
       return value.toString();
     }
 
+    // Objects returned from here are the ones JSON.stringify descends into, so
+    // they are the ones pushed onto the stack.
     if (value instanceof Error) {
-      return {
+      const converted: Record<string, unknown> = {
         name: value.name,
         message: value.message,
         stack: value.stack,
       };
+      stack.push({ holder: this, key, value: converted });
+      return converted;
     }
 
     if (value instanceof RegExp) {
@@ -182,11 +262,19 @@ export function stringifyWithRedaction(
     }
 
     if (value instanceof Map) {
-      return Object.fromEntries(value);
+      const converted = Object.fromEntries(value);
+      stack.push({ holder: this, key, value: converted });
+      return converted;
     }
 
     if (value instanceof Set) {
-      return Array.from(value);
+      const converted = Array.from(value);
+      stack.push({ holder: this, key, value: converted });
+      return converted;
+    }
+
+    if (value !== null && typeof value === 'object') {
+      stack.push({ holder: this, key, value });
     }
 
     return value;
@@ -197,14 +285,31 @@ export function stringifyWithRedaction(
 
 /**
  * Deep clone an object.
+ *
+ * `ancestors` holds the objects on the path currently being cloned. Log entries
+ * routinely contain self-referencing error contexts, so a value already on that
+ * path is replaced with the circular marker instead of recursing forever.
  */
-function deepClone<T>(obj: T): T {
+function deepClone<T>(obj: T, ancestors: Set<object> = new Set()): T {
   if (obj === null || typeof obj !== 'object') {
     return obj;
   }
 
+  if (ancestors.has(obj as object)) {
+    return CIRCULAR as unknown as T;
+  }
+
+  ancestors.add(obj as object);
+  try {
+    return deepCloneValue(obj, ancestors);
+  } finally {
+    ancestors.delete(obj);
+  }
+}
+
+function deepCloneValue<T>(obj: T, ancestors: Set<object>): T {
   if (Array.isArray(obj)) {
-    return obj.map((item) => deepClone(item)) as unknown as T;
+    return obj.map((item) => deepClone(item, ancestors)) as unknown as T;
   }
 
   if (obj instanceof Date) {
@@ -218,7 +323,7 @@ function deepClone<T>(obj: T): T {
   if (obj instanceof Map) {
     const result = new Map();
     for (const [key, value] of obj) {
-      result.set(key, deepClone(value));
+      result.set(key, deepClone(value, ancestors));
     }
     return result as unknown as T;
   }
@@ -226,14 +331,15 @@ function deepClone<T>(obj: T): T {
   if (obj instanceof Set) {
     const result = new Set();
     for (const value of obj) {
-      result.add(deepClone(value));
+      result.add(deepClone(value, ancestors));
     }
     return result as unknown as T;
   }
 
   const result: Record<string, unknown> = {};
-  for (const key of Object.keys(obj)) {
-    result[key] = deepClone((obj as Record<string, unknown>)[key]);
+  const source = obj as Record<string, unknown>;
+  for (const key of Object.keys(source)) {
+    result[key] = deepClone(source[key], ancestors);
   }
   return result as T;
 }

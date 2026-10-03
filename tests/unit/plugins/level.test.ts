@@ -116,3 +116,65 @@ describe('parseLevel', () => {
     expect(parseLevel('unknown' as any)).toBe(LOG_LEVELS.info);
   });
 });
+
+// F18: LOG_LEVELS is a plain object literal, so an unguarded `LOG_LEVELS[name]`
+// lookup also resolves inherited keys ("constructor", "toString", ...) to a
+// function. Storing that in ctx.level made every `levelNum >= ctx.level`
+// comparison false, silently dropping every log.
+describe('level plugin prototype-key safety (F18)', () => {
+  const PROTO_KEYS = [
+    'constructor',
+    'toString',
+    'valueOf',
+    'hasOwnProperty',
+    'isPrototypeOf',
+    'propertyIsEnumerable',
+    'toLocaleString',
+    '__proto__',
+    '__defineGetter__',
+  ] as any[];
+
+  it('parseLevel never returns a function for prototype keys', () => {
+    for (const key of PROTO_KEYS) {
+      expect(typeof parseLevel(key)).toBe('number');
+    }
+  });
+
+  it('parseLevel still falls back to info for unknown keys', () => {
+    expect(parseLevel('constructor')).toBe(LOG_LEVELS.info);
+    expect(parseLevel('nope' as any)).toBe(LOG_LEVELS.info);
+  });
+
+  it('setLevel leaves ctx.level untouched for prototype keys', () => {
+    for (const key of PROTO_KEYS) {
+      const ctx: LogContext = { level: LOG_LEVELS.error } as LogContext;
+      setLevel(ctx, key);
+      expect(ctx.level).toBe(LOG_LEVELS.error);
+    }
+  });
+
+  it('a corrupted ctx.level can no longer be produced, so logging never silently stops', () => {
+    for (const key of PROTO_KEYS) {
+      const ctx: LogContext = { level: LOG_LEVELS.info } as LogContext;
+      setLevel(ctx, key);
+      // Exactly what logger.isEnabled() computes for error/fatal.
+      expect(LOG_LEVELS.fatal >= ctx.level).toBe(true);
+      expect(LOG_LEVELS.error >= ctx.level).toBe(true);
+    }
+  });
+
+  it('isLevelEnabled never reports a prototype key as enabled', () => {
+    const ctx: LogContext = { level: LOG_LEVELS.trace } as LogContext;
+    for (const key of PROTO_KEYS) {
+      expect(isLevelEnabled(ctx, key)).toBe(false);
+    }
+  });
+
+  it('normal threshold behaviour is unchanged', () => {
+    const ctx: LogContext = { level: LOG_LEVELS.info } as LogContext;
+    expect(isLevelEnabled(ctx, 'debug')).toBe(false);
+    expect(isLevelEnabled(ctx, 'info')).toBe(true);
+    expect(isLevelEnabled(ctx, 'error')).toBe(true);
+    expect(isLevelEnabled(ctx, 'fatal')).toBe(true);
+  });
+});

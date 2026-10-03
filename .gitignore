@@ -18,3 +18,4 @@ website/.env
 
 .claude/
 .freebuff/
+.temp_files/

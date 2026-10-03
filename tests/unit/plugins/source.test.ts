@@ -208,19 +208,35 @@ describe('extractFileName', () => {
 });
 
 describe('getCallerLocation', () => {
-  it('should return caller location', () => {
-    const location = getCallerLocation();
+  // NOTE (F19): these three assertions used to be `expect(location).toBeDefined()`
+  // / `toHaveProperty('file')`. That passed vacuously: before the isInternalFrame
+  // fix, a bare "node_modules" pattern was only compared against the bare file
+  // name ("index.js"), so it never matched and getCallerLocation() returned the
+  // vitest runner's own file (node_modules/@vitest/runner/dist/index.js) as the
+  // "caller". Any frame satisfied the old assertion. The assertions below are
+  // strictly stronger: they check the real invariant, that the returned frame is
+  // never a library/internal frame, and accept `undefined` when the stack
+  // genuinely contains no caller frame (which is the case under vitest).
+  function expectNoInternalFrame(location: ReturnType<typeof getCallerLocation>) {
+    if (location === undefined) return;
+    const pathToCheck = location.path || location.file;
+    expect(pathToCheck).not.toContain('node_modules');
+    expect(pathToCheck).not.toContain('@vitest');
+    expect(pathToCheck).not.toContain('node:internal');
+    expect(location.file).not.toBe('index.js');
     expect(location).toHaveProperty('file');
+  }
+
+  it('should never return a library frame as the caller', () => {
+    expectNoInternalFrame(getCallerLocation());
   });
 
   it('should accept skip parameter', () => {
-    const location = getCallerLocation(2);
-    expect(location).toBeDefined();
+    expectNoInternalFrame(getCallerLocation(2));
   });
 
   it('should accept internal patterns', () => {
-    const location = getCallerLocation(0, ['node_modules']);
-    expect(location).toBeDefined();
+    expectNoInternalFrame(getCallerLocation(0, ['node_modules']));
   });
 });
 
@@ -274,3 +290,91 @@ describe('formatLocation', () => {
     expect(formatted).toBe('test.ts:42');
   });
 });
+
+// F19: sourcePlugin() defaulted to depth 4 ("skip internal frames"), but
+// getSourceLocation() already skips its own frame plus the wrapper arrow, so a
+// depth of 4 walked 4 *caller* frames past the call site and reported node
+// internals (loader:660) or undefined as the log's origin.
+describe('source plugin call-site resolution (F19)', () => {
+  const SELF = 'source.test.ts';
+
+  function mockKernel() {
+    const ctx: LogContext = {} as LogContext;
+    return {
+      getContext: () => ctx,
+      use: () => {},
+      unregister: () => false,
+      has: () => false,
+      list: () => [],
+      init: async () => {},
+      destroy: async () => {},
+    } as any;
+  }
+
+  it('getSource() reports the calling file by default, not a node internal', () => {
+    const kernel = mockKernel();
+    sourcePlugin().install(kernel);
+    const loc = kernel.getSource();
+    expect(loc).toBeDefined();
+    expect(loc!.file).toBe(SELF);
+    expect(String(loc!.path)).toContain(SELF);
+  });
+
+  it('getSource() is stable across repeated calls', () => {
+    const kernel = mockKernel();
+    sourcePlugin().install(kernel);
+    const first = kernel.getSource();
+    for (let i = 0; i < 5; i++) {
+      expect(kernel.getSource().file).toBe(first.file);
+    }
+  });
+
+  it('an explicit depth is still honoured (shifts the reported frame)', () => {
+    const kernel = mockKernel();
+    sourcePlugin({ depth: 0 }).install(kernel);
+    const at0 = kernel.getSource();
+    sourcePlugin({ depth: 1 }).install(kernel);
+    const at1 = kernel.getSource();
+    expect(`${at0.file}:${at0.line}`).not.toBe(`${at1.file}:${at1.line}`);
+  });
+
+  it('an oversized depth returns undefined rather than a bogus frame', () => {
+    const kernel = mockKernel();
+    sourcePlugin({ depth: 9999 }).install(kernel);
+    expect(kernel.getSource()).toBeUndefined();
+  });
+
+  it('addSourceLocation() defaults to the immediate caller', () => {
+    const entry = addSourceLocation({ level: 30, msg: 'x' });
+    expect(entry.file).toBe(SELF);
+    expect(typeof entry.line).toBe('number');
+  });
+
+  });
+
+// F19: isInternalFrame() treated a bare pattern like "node_modules" as a file
+// name, so it compared it against "index.js" and never matched - library frames
+// were reported as the caller.
+describe('isInternalFrame bare-path patterns (F19)', () => {
+  it('flags a node_modules path whose file name is unrelated', () => {
+    expect(
+      isInternalFrame({ file: 'index.js', path: 'C:/x/node_modules/foo/index.js', line: 1 })
+    ).toBe(true);
+  });
+
+  it('flags a scoped package path', () => {
+    expect(
+      isInternalFrame({ file: 'logger.js', path: '/app/node_modules/@oxog/log/dist/logger.js', line: 1 })
+    ).toBe(true);
+  });
+
+  it('still does not flag user code', () => {
+    expect(isInternalFrame({ file: 'app.ts', path: 'C:/proj/src/app.ts', line: 1 })).toBe(false);
+  });
+
+  it('falls back to the file name when no path is present', () => {
+    expect(isInternalFrame({ file: '<anonymous>', line: 1 })).toBe(true);
+  });
+});
+
+

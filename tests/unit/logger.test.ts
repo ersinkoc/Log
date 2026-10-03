@@ -371,4 +371,113 @@ describe('Logger', () => {
       expect(log).toBeDefined();
     });
   });
+
+  describe('reserved entry fields', () => {
+    it('should not let payload data overwrite level, levelName, msg or time', () => {
+      mock.clear();
+      logger.error({ level: 999, levelName: 'debug', msg: 'spoofed', time: 0 }, 'real error');
+
+      const entry = mock.getEntries()[0];
+      expect(entry.level).toBe(50);
+      expect(entry.levelName).toBe('error');
+      expect(entry.msg).toBe('real error');
+      expect(entry.time).toBeGreaterThan(0);
+    });
+
+    it('should not let context bindings overwrite metadata', () => {
+      mock.clear();
+      const log = createLogger({
+        transports: [mock],
+        level: 'trace',
+        context: { msg: 'from binding', levelName: 'fatal' }
+      });
+      log.info('real');
+
+      const entry = mock.getEntries()[0];
+      expect(entry.msg).toBe('real');
+      expect(entry.levelName).toBe('info');
+    });
+
+    it('should still pass ordinary payload fields through', () => {
+      mock.clear();
+      logger.info({ userId: 7, nested: { a: 1 } }, 'msg');
+
+      const entry = mock.getEntries()[0];
+      expect(entry.userId).toBe(7);
+      expect(entry.nested).toEqual({ a: 1 });
+      expect(entry.msg).toBe('msg');
+    });
+  });
+
+  describe('level validation is not fooled by Object.prototype', () => {
+    it('should reject prototype property names in config', () => {
+      expect(() => createLogger({ level: 'constructor' as any })).toThrow('Invalid log level');
+      expect(() => createLogger({ level: 'toString' as any })).toThrow('Invalid log level');
+      expect(() => createLogger({ level: 'valueOf' as any })).toThrow('Invalid log level');
+      expect(() => createLogger({ level: '__proto__' as any })).toThrow('Invalid log level');
+    });
+
+    it('should reject prototype property names in setLevel', () => {
+      const log = createLogger({ transports: [mock] });
+      expect(() => log.setLevel('constructor' as any)).toThrow('Invalid log level');
+      expect(() => log.setLevel('toString' as any)).toThrow('Invalid log level');
+      expect(log.getLevel()).toBe('info');
+    });
+
+    it('should still accept every valid level', () => {
+      const log = createLogger({ transports: [mock], level: 'trace' });
+      for (const level of ['trace', 'debug', 'info', 'warn', 'error', 'fatal'] as const) {
+        log.setLevel(level);
+        expect(log.getLevel()).toBe(level);
+      }
+    });
+  });
+
+  describe('child loggers inherit runtime state', () => {
+    it('should inherit the level currently in effect, not the construction-time level', () => {
+      mock.clear();
+      const parent = createLogger({ transports: [mock], level: 'error' });
+      parent.setLevel('trace');
+
+      const child = parent.child({ module: 'db' });
+      expect(child.getLevel()).toBe('trace');
+
+      child.debug('from child');
+      expect(mock.getEntries()).toHaveLength(1);
+      expect(mock.getEntries()[0].module).toBe('db');
+    });
+
+    it('should have withCorrelation inherit the runtime level too', () => {
+      mock.clear();
+      const parent = createLogger({ transports: [mock], level: 'error' });
+      parent.setLevel('trace');
+
+      const correlated = parent.withCorrelation('c1');
+      expect(correlated.getLevel()).toBe('trace');
+
+      correlated.debug('from correlated');
+      expect(mock.getEntries()).toHaveLength(1);
+      expect(mock.getEntries()[0].correlationId).toBe('c1');
+    });
+
+    it('should keep the child independently adjustable after inheriting', () => {
+      mock.clear();
+      const parent = createLogger({ transports: [mock], level: 'error' });
+      parent.setLevel('trace');
+
+      const child = parent.child({ module: 'db' });
+      child.setLevel('error');
+      expect(child.getLevel()).toBe('error');
+      expect(parent.getLevel()).toBe('trace');
+
+      child.debug('filtered');
+      expect(mock.getEntries()).toHaveLength(0);
+    });
+
+    it('should inherit through nested child loggers', () => {
+      const parent = createLogger({ transports: [mock], level: 'error' });
+      parent.setLevel('trace');
+      expect(parent.child({ a: 1 }).child({ b: 2 }).getLevel()).toBe('trace');
+    });
+  });
 });
